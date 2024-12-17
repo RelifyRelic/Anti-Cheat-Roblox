@@ -1,0 +1,141 @@
+-- Roblox Anti-Cheat Script
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService") -- Required for webhook functionality
+
+-- Anti-Cheat Settings
+local DETECTION_INTERVAL = 0.5 -- How often to check for cheating (in seconds)
+local SPEED_LIMIT = 50 -- Max speed allowed before flagging as speed hacking
+local FLYING_HEIGHT_THRESHOLD = 10 -- Max height above ground before flagging as flying
+local TELEPORT_DISTANCE_THRESHOLD = 100 -- Max distance that can be traveled instantly
+
+-- Remote Events
+local CheatDetectedEvent = Instance.new("RemoteEvent")
+CheatDetectedEvent.Name = "CheatDetectedEvent"
+CheatDetectedEvent.Parent = ReplicatedStorage
+
+local BanPlayerEvent = Instance.new("RemoteEvent")
+BanPlayerEvent.Name = "BanPlayerEvent"
+BanPlayerEvent.Parent = ReplicatedStorage
+
+-- Table to track player positions for teleport detection
+local previousPositions = {}
+local previousVelocities = {}
+local suspiciousActivityCount = {}
+
+-- Webhook URL
+local WEBHOOK_URL = "https://your-webhook-url-here" -- Replace with your webhook URL
+
+-- Function to send webhook notification
+local function sendWebhookNotification(playerName, cheatType)
+    local data = {
+        username = "Anti-Cheat System",
+        embeds = {{
+            title = "Cheating Detected!",
+            description = playerName .. " has been flagged for: " .. cheatType,
+            color = 16711680
+        }}
+    }
+    HttpService:PostAsync(WEBHOOK_URL, HttpService:JSONEncode(data))
+end
+
+-- Function to detect various cheat behaviors
+local function detectCheating(player)
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    local currentPosition = rootPart.Position
+    local currentVelocity = rootPart.Velocity
+    local lastPosition = previousPositions[player] or currentPosition
+
+    -- Detect speed hacks
+    local speed = currentVelocity.magnitude
+    if speed > SPEED_LIMIT then
+        warn(player.Name .. " is suspected of speed hacking!")
+        CheatDetectedEvent:FireClient(player, "Speed Hacking")
+        sendWebhookNotification(player.Name, "Speed Hacking")
+    end
+
+    -- Detect flying
+    local ray = Ray.new(currentPosition, Vector3.new(0, -50, 0))
+    local hit, position = workspace:FindPartOnRay(ray, character)
+    local heightFromGround = (currentPosition - position).magnitude
+    if heightFromGround > FLYING_HEIGHT_THRESHOLD and currentVelocity.Y > 1 then
+        warn(player.Name .. " is suspected of flying!")
+        CheatDetectedEvent:FireClient(player, "Flying")
+        sendWebhookNotification(player.Name, "Flying")
+    end
+
+    -- Detect teleportation
+    local distanceMoved = (currentPosition - lastPosition).magnitude
+    if distanceMoved > TELEPORT_DISTANCE_THRESHOLD then
+        warn(player.Name .. " is suspected of teleporting!")
+        CheatDetectedEvent:FireClient(player, "Teleportation")
+        sendWebhookNotification(player.Name, "Teleportation")
+    end
+
+    -- Update position and velocity trackers
+    previousPositions[player] = currentPosition
+end
+
+-- Custom Ban UI
+local function createBanUI(player)
+    local playerGui = player:WaitForChild("PlayerGui")
+    local screenGui = Instance.new("ScreenGui")
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0.3, 0, 0.3, 0)
+    frame.Position = UDim2.new(0.35, 0, 0.35, 0)
+    frame.BackgroundColor3 = Color3.new(1, 0, 0)
+    frame.Parent = screenGui
+    
+    local message = Instance.new("TextLabel")
+    message.Size = UDim2.new(1, 0, 0.5, 0)
+    message.Position = UDim2.new(0, 0, 0.25, 0)
+    message.Text = "You have been banned for cheating."
+    message.TextScaled = true
+    message.TextColor3 = Color3.new(1, 1, 1)
+    message.Parent = frame
+    
+    screenGui.Parent = playerGui
+end
+
+-- Detect and ban player if they exceed suspicion thresholds
+local function banPlayer(player)
+    createBanUI(player)
+    player:Kick("You have been banned for cheating.")
+end
+
+RunService.Heartbeat:Connect(function()
+    for _, player in ipairs(Players:GetPlayers()) do
+        pcall(function()
+            detectCheating(player)
+            if suspiciousActivityCount[player] and suspiciousActivityCount[player] > 10 then
+                banPlayer(player)
+                sendWebhookNotification(player.Name, "Banned for Multiple Suspicious Activities")
+            end
+        end)
+    end
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(character)
+        previousPositions[player] = nil
+        suspiciousActivityCount[player] = 0
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    previousPositions[player] = nil
+    suspiciousActivityCount[player] = nil
+end)
+
+BanPlayerEvent.OnServerEvent:Connect(function(player)
+    banPlayer(player)
+    sendWebhookNotification(player.Name, "Admin Banned Player")
+end)
+
+print("Anti-Cheat System Loaded")
